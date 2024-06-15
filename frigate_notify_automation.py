@@ -3,6 +3,9 @@ from datetime import timedelta, datetime
 
 event_states = {}
 
+FRIGATE_SNOOZE_ACTION = 'FRIGATE_SNOOZE'
+HASS_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
+
 @mqtt_trigger('frigate/events', 'payload_obj["type"] == "new"')
 def frigate_new_event(payload_obj=None):
   log.debug(f"Frigate NEW event fired {payload_obj}")
@@ -50,8 +53,17 @@ def frigate_end_event(payload_obj=None):
     log.warning(f"Frigate {len(event_states)} events pending. This should be 0.")
 
 
+@event_trigger('mobile_app_notification_action', f'action=="{FRIGATE_SNOOZE_ACTION}"')
+def frigate_snooze_action():
+  new_time = datetime.now() + timedelta(minutes=10)
+  string_time = new_time.strftime(HASS_DATE_FORMAT)
+  state.set('input_datetime.frigate_notification_snooze', string_time)
+
 
 def send_image(payload_obj):
+  if is_snoozed():
+    return
+
   frigate_id = payload_obj['after']['id']
 
   arguments = {
@@ -71,6 +83,9 @@ def send_image(payload_obj):
   event_states[frigate_id]['images_sent'] += 1
 
 def send_clip(payload_obj):
+  if is_snoozed():
+    return
+
   frigate_id = payload_obj['after']['id']
   image_url = make_url(frigate_id, 'snapshot.jpg?bbox=1&crop=1')
   video_url = make_url(frigate_id, 'clip.mp4')
@@ -95,6 +110,10 @@ def send_clip(payload_obj):
           'title': 'View Snapshot',
           'uri': image_url,
         },
+        {
+          'action': FRIGATE_SNOOZE_ACTION,
+          'title': 'Snooze',
+        },
       ]
     }
   }
@@ -108,3 +127,12 @@ def make_title(payload_obj):
 
 def make_url(frigate_id, file_name):
   return f'{hass.config.external_url}/api/frigate/notifications/{frigate_id}/{file_name}'
+
+
+def is_snoozed():
+  # Never snooze if the alarm is armed
+  if alarm_control_panel.alarmo != 'disarmed':
+    return False
+
+  parsed_datetime = datetime.strptime(input_datetime.frigate_notification_snooze, HASS_DATE_FORMAT)
+  return datetime.now() < parsed_datetime
